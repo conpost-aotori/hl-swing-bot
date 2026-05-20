@@ -28,6 +28,8 @@ ml = [
 [project.scripts]
 hl-collect = "hl_swing_bot.collector:main"
 hl-notify = "hl_swing_bot.notify:main"
+hl-strategy = "hl_swing_bot.strategy_runner:main"
+hl-backtest = "hl_swing_bot.backtest:main"
 
 [build-system]
 requires = ["setuptools>=68"]

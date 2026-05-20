@@ -1,0 +1,63 @@
+name: strategy
+
+# Phase 1 strategy runner: evaluates the latest closed 1h bar, checks open
+# signal outcomes against current mark, and posts to Discord.
+
+on:
+  schedule:
+    - cron: "5 * * * *"      # 5 minutes past every hour (1h-bar should be closed)
+    - cron: "*/20 * * * *"   # also every 20 min to catch TP/SL between bar closes
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute but do not write or post"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hl-strategy
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Run strategy
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PYTHONIOENCODING: utf-8
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: |
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            python -m hl_swing_bot.strategy_runner --dry-run
+          else
+            python -m hl_swing_bot.strategy_runner
+          fi
+
+      - name: Commit DB state changes
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f data/market.duckdb ] && [ -n "$(git status --porcelain data/market.duckdb)" ]; then
+            git add data/market.duckdb
+            git commit -m "chore: strategy state update [skip ci]"
+            git push || (git pull --rebase --autostash && git push)
+          else
+            echo "no DB change."
+          fi
