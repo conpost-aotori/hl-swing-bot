@@ -67,6 +67,22 @@ CREATE TABLE IF NOT EXISTS signals (
 CREATE INDEX IF NOT EXISTS idx_signals_status ON signals (status, coin);
 """
 
+# Phase 1.5: tall feature store. One row per (coin, time, feature_name) so
+# sibling-project features at any cadence (1h / 6h / daily) coexist without
+# schema changes. See SPEC_PHASE1_5.md.
+SCHEMA_FEATURES = """
+CREATE TABLE IF NOT EXISTS features (
+    coin              VARCHAR NOT NULL,
+    feature_time_ms   BIGINT  NOT NULL,
+    feature_name      VARCHAR NOT NULL,
+    feature_value     DOUBLE  NOT NULL,
+    source            VARCHAR NOT NULL,
+    ingested_at_ms    BIGINT  NOT NULL,
+    PRIMARY KEY (coin, feature_time_ms, feature_name)
+);
+CREATE INDEX IF NOT EXISTS idx_features_name_time ON features (feature_name, feature_time_ms);
+"""
+
 # Aggregates 1m candles into 1h bars. Only emits CLOSED hours (we filter the
 # in-progress bar out at the call site by capping end_hour at now-1h).
 SQL_HOURLY_OHLCV = """
@@ -92,6 +108,7 @@ class Storage:
         self._conn.execute(SCHEMA_CANDLES)
         self._conn.execute(SCHEMA_FUNDING)
         self._conn.execute(SCHEMA_SIGNALS)
+        self._conn.execute(SCHEMA_FEATURES)
 
     def close(self) -> None:
         self._conn.close()
@@ -278,3 +295,79 @@ class Storage:
             "direction": row[2],
             "status": row[3],
         }
+
+    # -- Feature store (Phase 1.5) -------------------------------------------
+
+    def upsert_features(self, rows: list[tuple], *, source: str,
+                        ingested_at_ms: int) -> int:
+        """Insert feature rows. Each row is (coin, feature_time_ms,
+        feature_name, feature_value). Idempotent on the composite PK."""
+        if not rows:
+            return 0
+        payload = [
+            (coin, ftime, fname, fval, source, ingested_at_ms)
+            for (coin, ftime, fname, fval) in rows
+        ]
+        self._conn.executemany(
+            """
+            INSERT INTO features VALUES (?,?,?,?,?,?)
+            ON CONFLICT (coin, feature_time_ms, feature_name) DO UPDATE SET
+                feature_value = excluded.feature_value,
+                source        = excluded.source,
+                ingested_at_ms= excluded.ingested_at_ms
+            """,
+            payload,
+        )
+        return len(payload)
+
+    def latest_feature_time_ms(self, source: str) -> int | None:
+        row = self._conn.execute(
+            "SELECT MAX(feature_time_ms) FROM features WHERE source = ?",
+            (source,),
+        ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    def feature_series(self, coin: str, feature_name: str) -> list[tuple]:
+        """All (feature_time_ms, feature_value) for a feature, oldest first."""
+        return self._conn.execute(
+            """
+            SELECT feature_time_ms, feature_value
+            FROM features
+            WHERE coin = ? AND feature_name = ?
+            ORDER BY feature_time_ms
+            """,
+            (coin, feature_name),
+        ).fetchall()
+
+    def latest_feature_value(self, coin: str, feature_name: str,
+                             *, as_of_ms: int | None = None) -> float | None:
+        """Most recent feature value at or before ``as_of_ms`` (forward-fill).
+        Without as_of_ms, returns the latest known value."""
+        if as_of_ms is None:
+            row = self._conn.execute(
+                """
+                SELECT feature_value FROM features
+                WHERE coin = ? AND feature_name = ?
+                ORDER BY feature_time_ms DESC LIMIT 1
+                """,
+                (coin, feature_name),
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                """
+                SELECT feature_value FROM features
+                WHERE coin = ? AND feature_name = ? AND feature_time_ms <= ?
+                ORDER BY feature_time_ms DESC LIMIT 1
+                """,
+                (coin, feature_name, as_of_ms),
+            ).fetchone()
+        return float(row[0]) if row else None
+
+    def feature_count(self, source: str | None = None) -> int:
+        if source is None:
+            row = self._conn.execute("SELECT COUNT(*) FROM features").fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM features WHERE source = ?", (source,)
+            ).fetchone()
+        return int(row[0]) if row else 0
