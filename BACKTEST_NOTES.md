@@ -89,3 +89,63 @@ degrades. **Keep score≥3.0.** But note all of this is measured inside the same
 - [ ] Re-run this backtest monthly; watch for the first LONG signals appearing.
 - [ ] Consider logging *would-be* signals (paper-trail) even below threshold, so we
       accumulate labeled near-misses for Phase 2 ML.
+
+---
+
+## Quant panel review — 2026-06-10 (Codex + Grok + 6-lens panel)
+
+Three independent reviews converged: **as built, this is a coin-flip after costs.** The
+edge (if any) is in forced-flow microstructure (liquidations, funding, positioning),
+NOT in the price/TA composite score. Real bugs found by reading the code:
+
+1. **`signal.py` composite score scale bug** — `abs(f.get("move_per_atr_z",0.0) or
+   f["move_per_atr"])`: when the z-score is exactly 0.0 it fell back to the raw ratio
+   (different scale) in the 0.30-weight lead term. **FIXED 2026-06-10** (+ same in
+   `backtest.py`). Didn't change the crash trades (large z there) but corrupted scores
+   in neutral regimes.
+2. **`realized_return` booked zero costs** — paper P&L was gross. **FIXED 2026-06-10**:
+   now net of round-trip fees+slippage (`COST_RT_PCT=0.19%`). Funding-over-hold still
+   TODO (can be material on 72h holds).
+3. **3 of 5 score terms are collinear** (move_per_atr / robust_z_168 / ret_4h all = "price
+   moved far from weekly median"). ~0.70 weight on one factor. → redesign (not yet done).
+4. **`vol_z` double-counted** (score term + gate) and computed as robust-z not std-z →
+   near-constant offset. → redesign.
+5. **`funding_bonus` is perverse** — rewards *non-extreme* funding, direction-blind;
+   penalizes the crash-shorts that actually fire. → redesign.
+6. **liquidation bias is unwired** — ingested to the feature store but `compute_features()`
+   never reads it back, so `signal.py` can't see it. This is the #1 opportunity (only
+   directional, causal, orthogonal feature). → wire as signed term (after offline test).
+
+Honest cost re-accounting of the existing 6 trades (still n≈1 regime): survive even
+heavy slippage (+0.76% → +0.56% → +0.26% at 5/15/30 bps-per-side). They survive because
+crash-onset moves are large — NOT evidence of generalizable edge.
+
+## ⛔ PRE-REGISTERED KILL-SWITCH (committed 2026-06-10, do not move the goalposts)
+
+The SPEC's "30+ signals, expectancy>0" criterion is **unfalsifiable-by-construction** —
+clustered crash-shorts can tick that box while telling us nothing about LONG/chop. Replace
+it with a regime-stratified bar. **Abandon the Phase-1 rule-based approach by 2026-09-10
+(90 days) if ANY of:**
+
+- (a) **zero LONG signals** ever fired across paper + offline walk-forward, OR
+- (b) **fewer than 3 temporally-independent regime-events** (signals within 72h / same
+  direction collapse into ONE event), OR
+- (c) **pooled NET expectancy < 0** after fees + funding×hold-hours + realistic slippage,
+  across those independent events, OR
+- (d) the liquidation `bias_1h` shows **|Spearman| < 0.05** with forward 4h/24h return
+  outside the June 1-3 crash window.
+
+**Graduate paper → ¥10k real ONLY when ALL of:** ≥3 distinct regime cells (up/down/chop)
+each with ≥8 independent episodes; ≥1 profitable LONG episode; pooled net expectancy >0
+after full costs; backtested max DD <8% of equity at 0.5%-per-trade risk. Realistically
+4–6 months, not 30 raw trades.
+
+**No LightGBM** until ≥200 independent labeled signals across ≥2 regimes. Sooner = memorizing
+one waterfall.
+
+**The single biggest self-deception:** we grade every change against one crash. Every
+proposed feature (bias, cost guard, sizer) was *favorable* in June 1-3, so the in-sample
+backtest will always "improve." The one experiment that exposes it: **offline anchored
+walk-forward over 12–18 months of 1h BTC with FROZEN params**, reporting per-regime-cell
+and per-episode (not per-trade) net expectancy, and **whether the LONG branch fires at all**
+in known uptrends. That is the next high-value task.

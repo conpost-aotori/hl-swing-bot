@@ -121,7 +121,7 @@ def _compute_features_at(bars: list[HourlyBar], i: int) -> dict | None:
 def _composite_score(f: dict) -> float:
     # Mirrors signal.composite_score (funding bonus = 1.0 since z=0).
     return (
-        0.30 * abs(f.get("move_per_atr_z", 0.0) or f["move_per_atr"])
+        0.30 * abs(f["move_per_atr_z"])
         + 0.25 * abs(f["robust_z_168"])
         + 0.20 * f["vol_z_168"]
         + 0.15 * abs(f["ret_4h"]) / max(f["atr_pct"], 1e-9)

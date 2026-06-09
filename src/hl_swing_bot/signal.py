@@ -45,6 +45,16 @@ SIGNAL_TTL_HOURS = 72
 COOLDOWN_SAME_DIR_MIN = 240   # 4h
 COOLDOWN_OPP_DIR_MIN = 60     # 1h
 
+# Cost model for honest paper-trade accounting. realized_return is stored NET
+# of these so the track record reflects what a real account would keep.
+# HL taker 0.045%/side x2 = 0.09% round-trip; +0.10% round-trip slippage
+# assumption (matches the backtest's 5bps/side). NOTE: funding over the hold is
+# NOT yet netted (can be material on 72h holds, and favourable for shorts in a
+# dump) — that's a known TODO requiring per-hour funding integration.
+TAKER_FEE_RT_PCT = 0.09
+SLIPPAGE_RT_PCT = 0.10
+COST_RT_PCT = TAKER_FEE_RT_PCT + SLIPPAGE_RT_PCT  # 0.19% round-trip
+
 HOUR_MS = 60 * 60 * 1000
 
 
@@ -58,8 +68,12 @@ def composite_score(f: dict) -> float:
     atr_pct = max(f["atr_pct"], 1e-9)
     ret_4h_per_atr = abs(f["ret_4h"]) / atr_pct
     funding_bonus = max(0.0, 1.0 - min(abs(f["funding_z_24"]), 3.0) / 3.0)
+    # move_per_atr_z is always populated by features.compute_features(). The
+    # previous `... or f["move_per_atr"]` fell back to the raw (un-normalized)
+    # ratio whenever the z-score was exactly 0.0 (a legitimate neutral reading),
+    # silently mixing two scales in this 0.30-weighted lead term. Fixed.
     return (
-        SCORE_WEIGHTS["move_per_atr"] * abs(f.get("move_per_atr_z", 0.0) or f["move_per_atr"])
+        SCORE_WEIGHTS["move_per_atr"] * abs(f["move_per_atr_z"])
         + SCORE_WEIGHTS["robust_z_168"] * abs(f["robust_z_168"])
         + SCORE_WEIGHTS["vol_z_168"]    * f["vol_z_168"]
         + SCORE_WEIGHTS["ret_4h"]       * ret_4h_per_atr
@@ -202,9 +216,13 @@ def update_outcomes(storage: Storage, coin: str, *, mark_price: float,
             else mark_price
         )
         if sig["direction"] == "LONG":
-            realized = (close_price / sig["entry_price"] - 1.0) * 100
+            gross = (close_price / sig["entry_price"] - 1.0) * 100
         else:
-            realized = (sig["entry_price"] / close_price - 1.0) * 100
+            gross = (sig["entry_price"] / close_price - 1.0) * 100
+
+        # Net of round-trip fees + slippage (NOT funding yet — see COST_RT_PCT).
+        # This is what we store, so the paper track record is honest about costs.
+        realized = gross - COST_RT_PCT
 
         if not dry_run:
             storage.close_signal(
@@ -218,5 +236,6 @@ def update_outcomes(storage: Storage, coin: str, *, mark_price: float,
             "status": new_status,
             "close_price": close_price,
             "realized_return": realized,
+            "gross_return": gross,
         })
     return notifications
