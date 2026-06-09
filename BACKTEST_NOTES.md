@@ -92,6 +92,50 @@ degrades. **Keep score≥3.0.** But note all of this is measured inside the same
 
 ---
 
+## Multi-regime walk-forward — 2026-06-10 (THE decisive test)
+
+Fetched the **full available HL 1h history: 5,002 bars = 208 days (2025-11-13 → 2026-06-09)**.
+(HL `candleSnapshot` caps at ~5000 bars — no deeper history exists on the venue.) Ran the
+EXISTING frozen params (score≥3.0, move≥1.0) — no tuning. This is 11× the prior 19-day window
+and spans real uptrends, downtrends, and chop. Script: `scripts/walkforward.py`
+(run with `PYTHON_JIT=0` — CPython 3.13 JIT crashes on the O(n²) hot loop).
+
+**Headline answers:**
+1. **Does LONG ever fire? → YES (38 LONG / 49 SHORT, 87 signals).** The strategy is NOT
+   short-only by construction; the 19-day sample was just a downtrend. Good — that uncertainty
+   is resolved.
+2. **As built, there is NO edge after realistic costs.** Gross +0.16%/trade → **net ≈ −0.03%**
+   at 0.19% round-trip (0.09% fees + 0.10% slippage), −0.14% at 0.30% RT. 40% hit-rate. The
+   famous "+0.76%, 67%" was ONE lucky crash; over 7 months it's a coin flip.
+
+**Per-regime (net of 0.19% round-trip) — the critical finding:**
+
+| regime | n | L/S | gross | **net** |
+|---|---|---|---|---|
+| uptrend | 17 | 12/5 | −0.64% | **−0.83%** ❌ loses |
+| downtrend (short) | 23 | 3/20 | +0.66% | **+0.47%** ✅ only edge |
+| chop | 39 | 19/20 | +0.10% | **−0.09%** ❌ bleeds |
+| **ALL** | 87 | 38/49 | +0.16% | **−0.03%** |
+
+**Episode-level (72h same-dir merged = honest n): 87 raw → 33 independent episodes,
+45% win-rate, +0.12% gross → ≈negative net.** No demonstrated edge.
+
+**Interpretation:** The TA composite's only profitable cell is **short-side during
+downtrends** (+0.47% net). It actively LOSES in uptrends (−0.83%, where the LONG side fires)
+and bleeds in chop (−0.09%). So the bot is really a *short-cascade detector with a losing
+long side and a losing chop habit bolted on*. The symmetric "swing both ways" thesis is
+**falsified** for the current TA-only LONG branch.
+
+**Kill-switch status:** NOT triggered (LONG fires; ≥3 regime cells; gross expectancy not <0).
+But it is clearly "no edge as built" — marginal/breakeven, negative after honest costs.
+
+**Implication for profitability (two paths):**
+- **(A) Specialize → short-only downtrend bot.** Trade ONLY when trend_4h is down. Keeps the
+  +0.47%-net cell, deletes the −0.83% uptrend bleed and −0.09% chop. Simplest, data-honest.
+- **(B) Fix the LONG side with the liquidation bias** (squeeze detection) so longs stop losing
+  — higher upside, unproven, needs the bias Spearman test first.
+The data favors (A) now, (B) as the R&D track to earn back the long side.
+
 ## Quant panel review — 2026-06-10 (Codex + Grok + 6-lens panel)
 
 Three independent reviews converged: **as built, this is a coin-flip after costs.** The
