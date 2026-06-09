@@ -267,7 +267,8 @@ def run_backtest(
         "signals": [
             {
                 "idx": s.idx, "ms": s.bar_close_ms, "direction": s.direction,
-                "entry": s.entry, "exit": s.exit_price, "status": s.status,
+                "entry": s.entry, "stop": s.stop, "exit": s.exit_price,
+                "exit_idx": s.exit_idx, "status": s.status,
                 "realized_pct": s.realized_pct, "score": s.score,
             }
             for s in signals

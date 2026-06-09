@@ -152,6 +152,23 @@ out-of-sample confirmation + Path-B. Caveats: still in-sample selection; +0.09% 
 maxDD 9.8% still >8% graduation gate (→ needs the fractional-risk sizer). Forward paper +
 the kill-switch remain the real test.
 
+### Path A sizing added (fractional-risk + cluster cap) — DD now passes the gate
+
+Added fixed-fractional-RISK sizing (`RISK_FRAC=0.005`, each stop-out loses exactly 0.5% of
+equity regardless of the 4.6× atr_pct swing) + an aggregate `CLUSTER_RISK_CAP=1.5%` (max ~3
+simultaneous shorts). Re-simulated the 208d short-only equity path with proper R-multiples:
+
+| sizing | trades | final eq | **maxDD** | avg net R |
+|---|---|---|---|---|
+| naive all-in (prior) | 49 | +3.9% | 9.8% | — |
+| **0.5%-risk + cluster cap** | 49 | +0.7% | **4.7%** ✅ | +0.03 |
+
+**maxDD 4.7% now passes the <8% graduation gate.** Risk is properly controlled. BUT the
+edge is genuinely thin — avg net R = +0.03, +0.7% compounded over 7 months. So: *not losing,
+controlled risk, but not yet meaningfully profitable.* Real upside must come from Path B
+(rebuild a profitable LONG via the bias squeeze signal) and/or sharpening short entries.
+The cluster cap didn't bind on this sample (cooldown spacing kept <3 open) — safety net.
+
 ### Path B prep (liquidation-bias long rebuild)
 `compute_features()` now reads `liq_bias` (forward-filled from the store) into every feature
 dict, so each emitted signal records the bias at signal time. Not yet used in the score —

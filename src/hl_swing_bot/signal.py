@@ -54,6 +54,16 @@ SIGNAL_TTL_HOURS = 72
 COOLDOWN_SAME_DIR_MIN = 240   # 4h
 COOLDOWN_OPP_DIR_MIN = 60     # 1h
 
+# Position sizing (fixed-fractional RISK off the ATR stop). Each stop-out loses a
+# constant fraction of equity regardless of the 4.6x atr_pct swing — so per-trade
+# equity risk is normalized, which keeps drawdown bounded (208d sim: 9.8% -> 4.7%).
+EQUITY_JPY = 100_000          # paper account size
+RISK_FRAC = 0.005             # 0.5% equity risked per trade (survive 20 losses = -10%)
+# Cap AGGREGATE open risk across overlapping same-coin signals. The 240min cooldown
+# + 72h TTL allow 3-4 simultaneous shorts during a crash — this bounds the cluster
+# bet so one waterfall can't compound into ruin.
+CLUSTER_RISK_CAP = 0.015      # 1.5% total open risk
+
 # Cost model for honest paper-trade accounting. realized_return is stored NET
 # of these so the track record reflects what a real account would keep.
 # HL taker 0.045%/side x2 = 0.09% round-trip; +0.10% round-trip slippage
@@ -136,6 +146,10 @@ def evaluate_and_emit(storage: Storage, coin: str, *, now_ms: int,
     funding_ok = abs(features["funding_z_24"]) <= FIRE_FUNDING_Z_MAX
     long_allowed = ENABLE_LONG or direction == "SHORT"
     in_cd, cd_reason = _in_cooldown(storage, coin, direction=direction, now_ms=now_ms)
+    # Aggregate-risk cap: each open signal already risks RISK_FRAC; adding one more
+    # must not push total open risk over CLUSTER_RISK_CAP.
+    open_risk = len(storage.open_signals(coin)) * RISK_FRAC
+    cluster_ok = (open_risk + RISK_FRAC) <= CLUSTER_RISK_CAP + 1e-9
 
     if not passes_score: reasons.append(f"score {score:.2f} < {FIRE_SCORE_MIN}")
     if not passes_move:  reasons.append(f"move/ATR {features['move_per_atr']:.2f} < {FIRE_MOVE_PER_ATR_MIN}")
@@ -143,12 +157,13 @@ def evaluate_and_emit(storage: Storage, coin: str, *, now_ms: int,
     if not trend_aligned: reasons.append(f"trend_4h={features['trend_4h']} vs {direction}")
     if not funding_ok:   reasons.append(f"|funding_z| {abs(features['funding_z_24']):.2f} > {FIRE_FUNDING_Z_MAX}")
     if not long_allowed: reasons.append("LONG disabled (short-only mode)")
+    if not cluster_ok:   reasons.append(f"cluster risk cap (open {open_risk*100:.1f}% + {RISK_FRAC*100:.1f}% > {CLUSTER_RISK_CAP*100:.1f}%)")
     if in_cd and cd_reason: reasons.append(cd_reason)
 
-    # would_fire = all signal gates pass; fired = also passes the direction policy.
+    # would_fire = all signal gates pass; fired = also passes direction + risk policy.
     would_fire = (passes_score and passes_move and passes_vol and trend_aligned
                   and funding_ok and not in_cd)
-    fired = would_fire and long_allowed
+    fired = would_fire and long_allowed and cluster_ok
 
     if not fired:
         # Log suppressed-but-otherwise-valid LONGs explicitly so we can confirm
@@ -170,6 +185,13 @@ def evaluate_and_emit(storage: Storage, coin: str, *, now_ms: int,
     else:
         stop = entry + STOP_ATR_MULT * atr
         target = entry - TARGET_ATR_MULT * atr
+
+    # Fixed-fractional-risk size: a stop-out loses exactly RISK_FRAC of equity,
+    # regardless of atr_pct. size_coin = risk_jpy / stop_distance_jpy.
+    stop_distance = abs(entry - stop)
+    risk_jpy = RISK_FRAC * EQUITY_JPY
+    size_coin = risk_jpy / stop_distance if stop_distance > 0 else 0.0
+    notional_jpy = size_coin * entry
 
     expires_at_ms = now_ms + SIGNAL_TTL_HOURS * HOUR_MS
     features_json = json.dumps(features, default=str)
@@ -201,6 +223,9 @@ def evaluate_and_emit(storage: Storage, coin: str, *, now_ms: int,
         "composite_score": score,
         "features": features,
         "rr_ratio": TARGET_ATR_MULT / STOP_ATR_MULT,
+        "size_coin": size_coin,
+        "notional_jpy": notional_jpy,
+        "risk_jpy": risk_jpy,
     }
 
 
