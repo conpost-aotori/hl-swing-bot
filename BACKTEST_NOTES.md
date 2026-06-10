@@ -174,6 +174,70 @@ The cluster cap didn't bind on this sample (cooldown spacing kept <3 open) — s
 dict, so each emitted signal records the bias at signal time. Not yet used in the score —
 that waits on the Spearman(bias, forward-return) test once enough forward bias accumulates.
 
+## Profit-logic lab — 2026-06-10 (6 empirical lenses + adversarial verification)
+
+Six lenses each wrote/ran scratch scripts against the 208d history (scripts preserved in
+`scratch/`). Every claimed improvement was then **adversarially re-derived by an independent
+verifier** (exact reproduction required, split-half, n≥15/half, ±25% parameter nudges).
+Baseline to beat: short-only NET +0.09%/trade, 49 trades, maxDD(sized) 4.7%.
+
+### ✅ CONFIRMED (adopt)
+
+| Improvement | net/trade | h1 / h2 | n | evidence |
+|---|---|---|---|---|
+| **Slope gate** — 4h SMA50 must be *declining* (SMA50 now < SMA50 10 4h-bars ago), on top of price<SMA | **+0.32%** | +0.27 / +0.36 | 37 | exact repro; lookback-insensitive (5–12 identical trades); **cross-asset: ETH kept +0.328 / removed −0.178, SOL kept +0.296 / removed −0.556**; in-loop = post-hoc identical |
+| **Red-4h streak ≥2** — require 2+ consecutive red 4h bars at entry | **+0.36%** (in-loop) | +0.37 / +0.35 | 36 | monotone in threshold (≥1 +0.13, ≥3 +0.68); survives 0.30% cost; removed trades lose in BOTH halves |
+| **BTC+ETH expansion** — identical frozen signal on ETH, global 1.5% cluster cap | **+0.153%** pooled | +0.20 / +0.10 | ~105 | byte-identical repro; SOL REJECTED (H2 sign flip); breadth on a correlated edge (40/49 co-fire within 6h), ~2.2× trades |
+
+⚠️ Slope gate and red-streak are both downtrend-confirmation filters tested separately on the
+same 49 trades — **overlap unmeasured. Run the joint backtest before stacking.**
+
+### 🟡 UNCERTAIN (log-only, pre-registered re-checks; do NOT gate yet)
+
+- **Exit BE@1.25ATR + TP 2.0** (headline +0.28): improvement concentrated in 3 trades
+  (bootstrap p=0.135); what DOES replicate is **drawdown halving** (h2 2.62→1.35%). Re-derive
+  the BE×TP grid on the slope-filtered trade set, then adopt primarily for DD.
+- **funding_apr ≥ 8% gate** (+0.49, n=25): H2 n=8, each half rests on ONE squeeze episode,
+  permutation p=0.11. 19/25 trades fire at HL's 10.95% APR floor (degenerate plateau).
+- **funding_z_168 > 0.5 gate** (+0.78, n=20): permutation p=0.013 on BTC but **fails split-half
+  on ETH and SOL** (Spearman ~0.06 there vs +0.31 BTC). Provisional; re-check after 20 paper signals.
+
+### ❌ REJECTED (never re-litigate)
+
+ATR floor/ceiling (deletes winners incl. +5.13% capitulation monsters) · score bands (sign
+flips) · session/weekday filters (fragile/n<10) · trails 1.0/1.5 ATR (choke winners) · BE@0.75
+(h2 neg) · partial TP (dominated) · time-stops alone · TP 3.5 · funding sign/momentum filters ·
+|funding_z_24| gate as-is (24h window measures the wrong thing) · SOL standalone · 3-coin
+portfolio (H2 neg) · vol-regime halves · depth≥3ATR · daily Coinalyze liq filters (fail H2).
+
+### Annualized projection (0.5% risk sizing) — honest
+
+- Baseline: ~86 t/yr × +0.032R ≈ **+1.4%/yr**, maxDD 4.7%
+- Slope gate BTC-only: 65 t/yr × +0.217R ≈ **+7%/yr**, maxDD 2.9%
+- Slope + ETH: ~144 t/yr ≈ **+12–15%/yr point estimate**, maxDD ~5–6%
+- **Bluntly**: per-trade t-stats 1.0–1.4, one regime cycle, filters overlap. Realistic
+  **+4–8%/yr**; the DD reduction is more trustworthy than the return number.
+
+### Data acquisition (pre-registered decision tests committed BEFORE collection)
+
+| Dataset | Method | Test that gates adoption |
+|---|---|---|
+| ETH/SOL funding (full window) | HL fundingHistory (fetched, in scratch/) | apr≥8 gate iff split-half + on ETH, n≥15/half |
+| Coinalyze 1h liq/OI | **start hourly poller NOW** (key in Perp-oi-chart/.env); 1h history only goes back ~65d — every week of delay is lost data | oi_chg_24h gate iff Spearman≥+0.2 both halves; liq_6h_z>2 veto iff ρ≤−0.25 both halves after ≥50 signals |
+| Binance taker imbalance | klines field 9, free, **backfills full 208d** | sell_share_6h Spearman≥+0.2 both halves (afternoon of work) |
+| Binance 3y 1h klines | /api/v3/klines paginated | slope+streak must beat no-gate in ≥4 of 6 half-year segments |
+| 5m candles (49 trade windows) | HL candleSnapshot interval=5m | replaces conservative intrabar assumptions in exit eval |
+| LC bias / Nansen positioning | keep accumulating (4h cadence) | bias≤−30 gate iff Spearman≤−0.25 + subset dominance, ≥30 candidates |
+
+### Implementation order (next 2 weeks)
+
+1. Slope gate (features/signal/backtest in lockstep)
+2. Fix `Storage.recent_funding_rates` (dedupe by hour — currently returns snapshots not hours) + backfill ≥169h funding at collector startup + log funding_z_168 on every signal (no gate)
+3. Joint backtest slope × red-streak × BE/TP grid on BTC+ETH → adopt extras only on split-half pass
+4. BTC+ETH live (coins list, global cluster cap)
+5. Coinalyze 1h poller + Binance taker-imbalance backfill + 3y regime check
+6. No real money until ≥20 paper signals match backtest behavior
+
 ## Quant panel review — 2026-06-10 (Codex + Grok + 6-lens panel)
 
 Three independent reviews converged: **as built, this is a coin-flip after costs.** The
