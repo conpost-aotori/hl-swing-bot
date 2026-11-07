@@ -23,6 +23,9 @@ ml = [
     "scikit-learn>=1.4",
     "matplotlib>=3.8",
     "mplfinance>=0.12",
+    # mplfinance imports six (`from six.moves import zip`) without declaring it;
+    # python-dateutil 4.0 no longer pulls six in, so declare it explicitly.
+    "six>=1.16",
 ]
 
 [project.scripts]
